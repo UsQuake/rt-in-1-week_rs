@@ -5,7 +5,7 @@ pub struct Vec3
 {
     elements : [f64;3]
 }
-type Point = Vec3;
+pub type Point = Vec3;
 
 
 impl Vec3

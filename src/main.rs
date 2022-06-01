@@ -8,6 +8,7 @@ mod utility;
 mod sphere;
 mod camera;
 mod material;
+mod indicate_bar;
 
 use crate::vec3::Vec3;
 use crate::ray::Ray;
@@ -16,7 +17,9 @@ use crate::color::Color;
 use crate::hitable_list::HitableList;
 use crate::sphere::Sphere;
 use crate::camera::Camera;
+use crate::indicate_bar::IndicateBar;
 
+use std::time::{Duration, SystemTime};
 use std::env;
 use std::fs::File;
 use std::io::prelude::*;
@@ -91,13 +94,13 @@ fn ray_color(r: Ray,  world: &mut HitableList, depth: i32)-> Vec3
 fn main() {
     let args: Vec<String> = env::args().collect();
     let mut file = File::create(&args[1])
-    .expect("Could not create file");
+    .expect("사용법: cargo run filename.ppm");
 
     //Image
-    let aspect_ratio = 2.0;
-    let image_width = 600;
+    let aspect_ratio = 16.0 / 9.0;
+    let image_width = 400;
     let image_height = (image_width as f32 / aspect_ratio)as u16;
-    let samples_per_pixel = 100;
+    let samples_per_pixel = 50;
     let max_depth = 50;
 
     //Camera
@@ -109,20 +112,17 @@ fn main() {
     let cam = Camera::new(lookfrom, lookat, vup, 20.0, aspect_ratio as f64, aperture, dist_to_focus);
 
     let image_shared_pointer = Arc::new(Mutex::new(image_process::PpmFormat::new(image_width,image_height,255)));
-    
+    let progress_shared_pointer = Arc::new(Mutex::new(indicate_bar::IndicateBar::new(image_height as u32)));
 
+    let now = SystemTime::now();
     let is_multi_thread = true;
     if !is_multi_thread
     {
         let mut rand_seed = ChaCha8Rng::seed_from_u64(45);
         let mut world = random_scene(&mut rand_seed);
+        let progress_bar = Arc::clone(&progress_shared_pointer);
         for  j in (0..image_height).rev(){
-            
-            
-            //World 
             for i in 0..image_width{
-                print!("스캔라인 남은 수: {}, {}\r", j, i);
-                std::io::stdout().flush().unwrap();
                 let mut pixel_color = Vec3::new(0.0, 0.0, 0.0);
                 for _ in 0..samples_per_pixel
                 {
@@ -135,60 +135,105 @@ fn main() {
                 let mut target_image = image_shared_pointer.lock().unwrap();
                 target_image.write_color(color::fcolor_to_icolor(pixel_color, samples_per_pixel),i as usize,j as usize);
             }
+            let mut progress_indicator = progress_bar.lock().unwrap();
+            progress_indicator.progress_one();
         }
     }
-    else{
-    //1.스레드 별로 쪼갠다
-    //
-    let thread_count = 12;
-    let draw_part_per_thread = image_height / thread_count;
-    let residue_count = image_height % thread_count;
-    println!("잔여: {}", residue_count);
-    let mut handles = vec![];
-    for thread_index in 0..thread_count
+    else
     {
-        let result_vector = Arc::clone(&image_shared_pointer);
-        let handle = thread::spawn(move || {
-            let mut color_vector_per_thread:Vec<Vec<color::Color>> = Vec::new();
+        let thread_count = 12;
+        let draw_part_per_thread = image_height / thread_count;
+        let residue_count = image_height % thread_count;
+        //Draw Residue By Single Thread
+        {
+            let result_vector = Arc::clone(&image_shared_pointer);
             let mut rand_seed = ChaCha8Rng::seed_from_u64(45);
             //World
             let mut world = random_scene(&mut rand_seed);
-            println!("thread_id[{}]: [{},{})", thread_index, thread_index * draw_part_per_thread, (thread_index + 1) * draw_part_per_thread);
-            for  j in thread_index * draw_part_per_thread.. (thread_index + 1) * draw_part_per_thread
+            let mut color_vector_per_thread:Vec<Vec<color::Color>> = Vec::new();
+            let progress_bar = Arc::clone(&progress_shared_pointer);
+            for  j in 0.. residue_count
             {
                 let mut column_vec:Vec<Color> = Vec::new();
-
                 for i in 0..image_width{
                     let mut pixel_color = Vec3::new(0.0, 0.0, 0.0);
                     for _ in 0..samples_per_pixel
                     {
-                        let u = (i as f64 + utility::random_double()) / (image_width-1) as f64;
-                        let v = (j as f64 + utility::random_double()) / (image_height-1) as f64;
-                        let r = cam.get_ray(u, v);
-                        pixel_color += ray_color(r, &mut world, max_depth);
-                        
+                      let u = (i as f64 + utility::random_double()) / (image_width-1) as f64;
+                       let v = (j as f64 + utility::random_double()) / (image_height-1) as f64;
+                       let r = cam.get_ray(u, v);
+                      pixel_color += ray_color(r, &mut world, max_depth);
+                    
                     }
                     column_vec.push(color::fcolor_to_icolor(pixel_color, samples_per_pixel));
                 }
-
                 color_vector_per_thread.push(column_vec);
-
+                let mut progress_indicator = progress_bar.lock().unwrap();
+                progress_indicator.progress_one();
             }
             let mut target_image = result_vector.lock().unwrap();
-            target_image.write_color_rows(color_vector_per_thread, (thread_index * draw_part_per_thread) as usize, ((thread_index + 1) * draw_part_per_thread) as usize);
+            target_image.write_color_rows(color_vector_per_thread, 0 , residue_count as usize);
 
+        }
 
-   });
-    handles.push(handle);
+        let mut handles = vec![];
+        for thread_index in 0..thread_count
+        {
+            let result_vector = Arc::clone(&image_shared_pointer);
+            let progress_bar = Arc::clone(&progress_shared_pointer);
+            let handle = 
+            thread::spawn(move || {
+            let mut color_vector_per_thread:Vec<Vec<color::Color>> = Vec::new();
+            let mut rand_seed = ChaCha8Rng::seed_from_u64(45);
+            //World
+            let mut world = random_scene(&mut rand_seed);
+            for  j in thread_index * draw_part_per_thread + residue_count.. (thread_index + 1) * draw_part_per_thread + residue_count
+            {
+                    let mut column_vec:Vec<Color> = Vec::new();
+
+                    for i in 0..image_width{
+                        let mut pixel_color = Vec3::new(0.0, 0.0, 0.0);
+                        for _ in 0..samples_per_pixel
+                        {
+                          let u = (i as f64 + utility::random_double()) / (image_width-1) as f64;
+                           let v = (j as f64 + utility::random_double()) / (image_height-1) as f64;
+                           let r = cam.get_ray(u, v);
+                          pixel_color += ray_color(r, &mut world, max_depth);
+                        
+                        }
+                        column_vec.push(color::fcolor_to_icolor(pixel_color, samples_per_pixel));
+                    }
+
+                    color_vector_per_thread.push(column_vec);
+                    let mut progress_indicator = progress_bar.lock().unwrap();
+                    progress_indicator.progress_one();
+                }
+                let mut target_image = result_vector.lock().unwrap();
+                
+                target_image.write_color_rows(color_vector_per_thread, (thread_index * draw_part_per_thread) as usize, ((thread_index + 1) * draw_part_per_thread) as usize);
+                
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
     }
-    for handle in handles {
-        handle.join().unwrap();
-    }
-    
-    }
+
     let target_image = image_shared_pointer.lock().unwrap();
     file.write_all(&format!("{}",target_image).into_bytes())
     .expect("파일에 쓸 수 없습니다!");
+    match now.elapsed() {
+        Ok(elapsed) => {
+            println!("\n\u{231b}\x1b[93m : {}초\x1b[0m", elapsed.as_secs());
+            //출력-> 모래시계모양 : N초(노랑색)
+        }
+        Err(e) => {
+            println!("에러 발생: {e:?}");
+        }
+    }
 }
 
     

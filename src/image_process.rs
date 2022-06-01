@@ -1,6 +1,5 @@
 use std::fmt;
 use crate::color::*;
-use std::sync::{Mutex, Arc};
 
     pub struct PpmFormat{
         pub buffer : Vec<Vec<Color>>,

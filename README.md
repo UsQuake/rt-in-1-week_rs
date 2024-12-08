@@ -1,4 +1,4 @@
-# Raytracing in one weekend - MultiThreaded Patch
+# Raytracing in one weekend - MT-Patched
 
 Rust로 작성한 Ray Tracing In One Weekend입니다. 랜덤함수 이외 오픈 소스 라이브러리 사용을 금하는 것을 목표로 하고 있습니다!
 스레드 부분은 독자적이고 이외는 https://github.com/fralken/ray-tracing-in-one-weekend 이 분의 코드에서 도움 받은 부분이 있음을 분명히 밝힙니다!
